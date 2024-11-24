@@ -4,3 +4,6 @@ pathlib
 numpy
 sounddevice
 pygame
+feedparser
+beautifulsoup4
+requests
