@@ -1,0 +1,6 @@
+openai
+python-dotenv
+pathlib
+numpy
+sounddevice
+pygame
