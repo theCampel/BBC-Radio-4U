@@ -7,3 +7,4 @@ pygame
 feedparser
 beautifulsoup4
 requests
+spotipy

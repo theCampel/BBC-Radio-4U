@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 from typing import Optional, Dict
 
 class RSSFetcher:
+    """"""
     def __init__(self, rss_urls: list[str]):
         self.rss_urls = rss_urls
 
@@ -15,7 +16,6 @@ class RSSFetcher:
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Try different content selectors (customize based on target sites)
             content_selectors = ['article', 'main', '.article-content', '.story-content']
             
             for selector in content_selectors:
@@ -33,33 +33,3 @@ class RSSFetcher:
             
         except Exception as e:
             return f"Error fetching article: {str(e)}"
-
-    def get_latest_articles(self, n: int = 5) -> list[Dict[str, str]]:
-        """Fetch and return the latest n articles from hardcoded RSS feeds."""
-        articles = []
-        
-        for rss_url in self.rss_urls:
-            try:
-                feed = feedparser.parse(rss_url)
-                
-                if feed.bozo == 0 and feed.entries:
-                    # Get the n latest entries from this feed
-                    latest_entries = feed.entries[:n]
-                    
-                    for entry in latest_entries:
-                        full_text = self.fetch_full_text(entry.link)
-                        articles.append({
-                            'title': entry.title,
-                            'text': full_text,
-                            'url': entry.link
-                        })
-                        
-                        # Stop if we've reached desired number of articles
-                        if len(articles) >= n:
-                            return articles
-                    
-            except Exception as e:
-                print(f"Error processing feed {rss_url}: {str(e)}")
-                continue
-                
-        return articles 
