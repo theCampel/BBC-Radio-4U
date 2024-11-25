@@ -3,6 +3,7 @@ import os
 import feedparser
 from typing import List, Dict, Any
 from .rss_fetcher import RSSFetcher
+from .constants import NEWS_SUMMARY_PROMPT
 
 # TODO: Make this not suck. 
 class NewsProcessor:
@@ -10,11 +11,7 @@ class NewsProcessor:
         self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.rss_fetcher = RSSFetcher([])  # Initialise with empty list as we'll use it for fetching only
         
-        # Terrible prompt. Works for now.
-        self.SYSTEM_PROMPT = """
-        You're a news aggregator. You will be given a news article, summarise it in MAX 8 bullet points. 
-        - Write in a clear, high-entropy style. 
-        """
+        self.SYSTEM_PROMPT = NEWS_SUMMARY_PROMPT
 
         self.articles = []
 

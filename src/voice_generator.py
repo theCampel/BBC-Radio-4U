@@ -51,7 +51,7 @@ class VoiceGenerator:
             
             # Add to queue
             self.audio_queue.put(temp_file.name)
-            print(f"Generated {'Matt' if i % 2 == 0 else 'Mollie'}'s line")
+            # print(f"Generated {'Matt' if i % 2 == 0 else 'Mollie'}'s line")
 
     def _play_from_queue(self, gap=0.3):
         """Play audio files as they become available in the queue"""
@@ -63,7 +63,7 @@ class VoiceGenerator:
             if audio_file is None:
                 break
                 
-            print("Playing next line...")
+            # print("Playing next line...")
             pygame.mixer.music.load(audio_file)
             pygame.mixer.music.play()
             

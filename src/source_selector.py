@@ -1,12 +1,8 @@
+from .constants import DEFAULT_RSS_FEEDS, MAX_TOTAL_ARTICLES
+
 class SourceSelector:
-    MAX_TOTAL_ARTICLES = 10
-    AVAILABLE_SOURCES = {
-        '1': ('The Intercept', 'https://theintercept.com/feed/?lang=en'),
-        '2': ('The Guardian', 'https://www.theguardian.com/uk/rss'),
-        '3': ('TechCrunch', 'https://techcrunch.com/feed/'),
-        '4': ('Wired', 'https://www.wired.com/feed/rss'),
-        '5': ('The Verge', 'https://www.theverge.com/rss/index.xml'),
-    }
+    MAX_TOTAL_ARTICLES = MAX_TOTAL_ARTICLES
+    AVAILABLE_SOURCES = DEFAULT_RSS_FEEDS
 
     def get_user_selection(self) -> list[tuple[str, str, int]]:
         """
