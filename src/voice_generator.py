@@ -21,6 +21,11 @@ AMPLITUDE_SCALING = 1000
 WAVE_FREQUENCY = 2
 WAVE_PHASE_SPEED = 6
 
+
+WAVE_FREQUENCY = 1            # One full cycle across screen width
+WAVE_PHASE_SPEED = 3        # Adjust for desired horizontal speed
+AMPLITUDE_SCALING = 500       # Adjust amplitude scaling as needed
+
 # Speaker colors
 SPEAKER_COLORS = {
     'matt': (0, 0, 255),
@@ -138,30 +143,23 @@ class VoiceGenerator:
 
                     smoothed_amplitude = np.mean(self.amplitude_history) * AMPLITUDE_SCALING
 
-                    # Generate base sine wave
+                    # Compute a single wave traveling horizontally
                     x_positions = np.linspace(0, SCREEN_WIDTH, num=SCREEN_WIDTH)
-                    phase_shift = time.time() * WAVE_PHASE_SPEED % (2 * np.pi)
-                    base_wave = np.sin((2 * np.pi * WAVE_FREQUENCY * x_positions / SCREEN_WIDTH) + phase_shift)
+                    # phase_shift grows with time to move wave horizontally
+                    phase_shift = time.time() * WAVE_PHASE_SPEED
+                    
+                    # One full sine wave across screen: (x_positions / SCREEN_WIDTH) goes from 0 to 1
+                    # Subtracting phase_shift moves the wave left; adding moves it right.
+                    y_positions = (SCREEN_HEIGHT / 2) - (smoothed_amplitude * np.sin(2 * np.pi * (WAVE_FREQUENCY * (x_positions / SCREEN_WIDTH) - phase_shift)))
+                    
+                    # Convert positions to a list of points for draw.lines
+                    points = list(zip(x_positions, y_positions))
 
-                    # Scale by amplitude and center vertically
-                    y_positions = (SCREEN_HEIGHT / 2) - (base_wave * smoothed_amplitude)
-
-                    # Draw multiple layered lines for a smooth, glowing effect
-                    # The center line is brightest, additional lines around it are dimmer and smaller.
-                    num_layers = 7
-                    max_line_width = 2
-                    for i in range(num_layers):
-                        # Layer from strongest (i=0) to weakest (i=num_layers-1)
-                        layer_scale = 1.0 - (i / (num_layers - 1)) * 0.8
-                        layer_color_value = 255 - int(200 * (i / (num_layers - 1)))
-                        layer_color = (layer_color_value, layer_color_value, layer_color_value)
-
-                        # Compute this layer's vertical positions by scaling amplitude
-                        layer_y_positions = (SCREEN_HEIGHT / 2) - (base_wave * smoothed_amplitude * layer_scale)
-                        layer_points = list(zip(x_positions, layer_y_positions))
-
-                        # Draw the line
-                        pygame.draw.lines(screen, layer_color, False, layer_points, max_line_width)
+                    # Get color based on current speaker
+                    color = SPEAKER_COLORS.get(current_speaker, SPEAKER_COLORS['default'])
+                    
+                    # Draw the wave with speaker-specific color
+                    pygame.draw.lines(screen, color, False, points, 2)
             else:
                 # No audio playing, just idle
                 pass
