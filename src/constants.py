@@ -24,7 +24,7 @@ RADIO_CONVERSATION_STYLE = """
 - Provoke thought and provide insights **while keeping the conversation fun**. 
 - Ask the users to get involved through messaging @bbc_radio_4u on instagram.
 - It will NOT use words like "laughs" or "giggles". 
-- It will NOT last longer than 8 conversational turns. 
+- It will NOT last longer than 3 conversational turns. 
 </conversation_style>
 
 <hosts_personalities>

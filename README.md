@@ -1,6 +1,6 @@
 # BBC-Radio-4U
 
-BBC-Radio-4U is an interactive audio application that generates and plays dialogues based on news articles and music tracks. It uses OpenAI's text-to-speech capabilities to create a dynamic audio experience with real-time visualization.
+BBC-Radio-4U is an interactive audio application that generates and plays dialogues based on news articles and music tracks. It uses OpenAI's text-to-speech capabilities to create a dynamic audio experience with real-time visualisation.
 
 ## Features
 
