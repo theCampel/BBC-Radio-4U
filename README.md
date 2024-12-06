@@ -1,20 +1,12 @@
 # BBC-Radio-4U
 
-A personalised radio station with seemless conversation between _two hosts_. It generates and plays dialogues based on recent news articles and the user's top music tracks.
-Uses OpenAI's text-to-speech to generate audio. Made custom visualisation of audio with a dynamic sine wave. 
-Made originally on a Sunday.
+A **personalised radio station** with seemless conversation between _two hosts_. It generates and plays dialogues **based** on recent **news articles** and the user's **top music tracks**.
+Uses OpenAI's text-to-speech to generate audio. Made **custom visualisation** of audio with a **dynamic sine wave**. 
+_Made originally in a single Sunday evening_.
 
 ## Demo:
 
 [![Demo](https://img.youtube.com/vi/E8vLzDipnew/0.jpg)](https://www.youtube.com/watch?v=E8vLzDipnew)
-
-
-## Features
-
-- **News Article Processing**: Select and process news articles to generate dialogues.
-- **Music Integration**: Integrates with Spotify to play random top songs.
-- **Dynamic Dialogue Generation**: Uses OpenAI to generate dialogues based on news and music context.
-- **Real-time Audio Visualisation**: Visualises audio playback with a dynamic sine wave animation.
 
 ## Next Steps:
 - Filter out junk articles from the news API using fine-tuned local model (BERT?)
@@ -23,6 +15,12 @@ Made originally on a Sunday.
 - Give user more control over the topics/style of the dialogue (allow them to select topics/styles)
   - Would be sick to have a juke-box style interface where you can select what's playing next / what they're talking about next.
 
+## Features
+
+- **News Article Processing**: Select and process news articles to generate dialogues.
+- **Music Integration**: Integrates with Spotify to play random top songs.
+- **Dynamic Dialogue Generation**: Uses OpenAI to generate dialogues based on news and music context.
+- **Real-time Audio Visualisation**: Visualises audio playback with a dynamic sine wave animation.
 
 ## Running it yourself
 
