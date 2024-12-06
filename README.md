@@ -1,7 +1,7 @@
 # BBC-Radio-4U
 
-A **personalised radio station** with seemless conversation between _two hosts_. It generates and plays dialogues **based** on recent **news articles** and the user's **top music tracks**.
-Uses OpenAI's text-to-speech to generate audio. Made **custom visualisation** of audio with a **dynamic sine wave**. 
+A _**personalised radio station**_ with seemless conversation between _two hosts_. It generates and plays dialogues _**based**_ on recent _**news articles**_ and the user's _**top music tracks**_.
+Uses OpenAI's text-to-speech to generate audio. Made _**custom visualisation**_ of audio with a _**dynamic sine wave**_. 
 _Made originally in a single Sunday evening_.
 
 ## Demo:
