@@ -9,10 +9,13 @@ BBC-Radio-4U is an interactive audio application that generates and plays dialog
 - **Dynamic Dialogue Generation**: Uses OpenAI to generate dialogues based on news and music context.
 - **Real-time Audio Visualisation**: Visualises audio playback with a dynamic sine wave animation.
 
+## Running it yourself
+
+1. Clone the repo
+2. Install the dependencies (`pip install -r requirements.txt`)
+3. Make sure you have a `.env` file with all relevant keys (OpenAI, Spotify (you'll have to set this up), etc.)
+4. Run the script (`python main.py` lol)
+
 ## Contributing
 
-Contributions are welcome! Please fork the repository and submit a pull request for any improvements or bug fixes.
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This code is far from perfect. If you want to help it grow arms and legs, feel free!
