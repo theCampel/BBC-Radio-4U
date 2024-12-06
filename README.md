@@ -6,13 +6,8 @@ Made originally on a Sunday.
 
 ## Demo:
 
-<div style="position: relative; width: 100%; padding-top: 56.25%; overflow: hidden;">
-  <iframe src="https://www.youtube.com/embed/E8vLzDipnew" 
-          style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" 
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-          allowfullscreen>
-  </iframe>
-</div>
+[![Demo](https://img.youtube.com/vi/E8vLzDipnew/0.jpg)](https://www.youtube.com/watch?v=E8vLzDipnew)
+
 
 ## Features
 
