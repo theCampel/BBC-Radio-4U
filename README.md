@@ -4,9 +4,7 @@ A _**personalised radio station**_ with seemless conversation between _two hosts
 Uses OpenAI's text-to-speech to generate audio. Made _**custom visualisation**_ of audio with a _**dynamic sine wave**_. 
 _Made originally in a single Sunday evening_.
 
-## Demo:
-
-[![Demo](https://img.youtube.com/vi/E8vLzDipnew/0.jpg)](https://www.youtube.com/watch?v=E8vLzDipnew)
+https://github.com/user-attachments/assets/be4d7855-a84f-4c7c-b678-b0c9d2c5ec20
 
 ## Next Steps:
 - Filter out junk articles from the news API using fine-tuned local model (BERT?)
