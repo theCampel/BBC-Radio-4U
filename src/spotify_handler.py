@@ -11,27 +11,40 @@ class SpotifyHandler:
             client_id=os.getenv('SPOTIFY_CLIENT_ID'),
             client_secret=os.getenv('SPOTIFY_CLIENT_SECRET'),
             redirect_uri="http://www.example.com",
-            scope="user-library-read user-modify-playback-state user-read-playback-state user-top-read"
+            scope="user-library-read user-modify-playback-state user-read-playback-state user-top-read playlist-read-private"
         ))
 
-    def get_random_top_song(self, limit=10):
+    def get_random_playlist_song(self, playlist_id, played_songs):
         """
-        Get user's top tracks and return a random one with artist and song name
+        Get a random track from a given playlist that has not been played before.
         Args:
-            limit (int): Number of top tracks to choose from
+            playlist_id (str): Spotify playlist ID.
+            played_songs (list): List of track URIs that have already been played.
         Returns:
-            dict: Contains name, artist and uri of the randomly selected track
+            dict: Contains name, artist and uri of the randomly selected track, or None if no unique track is found.
         """
-        top_tracks = self.sp.current_user_top_tracks(time_range='short_term', limit=limit)
+        # Fetch playlist tracks
+        tracks = []
+        results = self.sp.playlist_tracks(playlist_id)
+        tracks.extend(results['items'])
+        while results['next']:
+            results = self.sp.next(results)
+            tracks.extend(results['items'])
         
-        if not top_tracks['items']:
+        # Filter only tracks (not episodes, local tracks, etc.)
+        tracks = [t for t in tracks if t['track'] and t['track']['type'] == 'track']
+
+        # Filter out tracks that have been played
+        available_tracks = [t for t in tracks if t['track']['uri'] not in played_songs]
+
+        if not available_tracks:
             return None
-        
-        random_track = random.choice(top_tracks['items'])
+
+        chosen = random.choice(available_tracks)['track']
         return {
-            'name': random_track['name'],
-            'artist': random_track['artists'][0]['name'],
-            'uri': random_track['uri']
+            'name': chosen['name'],
+            'artist': chosen['artists'][0]['name'],
+            'uri': chosen['uri']
         }
 
     def play_track(self, track_uri):
@@ -41,20 +54,17 @@ class SpotifyHandler:
             track_uri (str): Spotify URI of the track to play
         """
         try:
-            # Ideally you're always playing a song, muted, then whenever
-            # this runs, you get put the song the user wants to listen to
-            # and make it audible. 
             self.sp.start_playback(uris=[track_uri])
-            self.sp.volume(60) 
+            self.sp.volume(60)
         except Exception as e:
-            print(f"Error playing track: {e}") 
+            print(f"Error playing track: {e}")
 
     def get_remaining_time(self):
         """Returns remaining time in milliseconds, or None if not playing"""
         playback = self.sp.current_playback()
-        if not playback or not playback['is_playing']:
+        if not playback or not playback.get('is_playing'):
             return None
         
         progress_ms = playback['progress_ms']
         total_ms = playback['item']['duration_ms']
-        return total_ms - progress_ms 
+        return total_ms - progress_ms
