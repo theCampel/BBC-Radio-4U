@@ -5,6 +5,7 @@ import argparse
 import time
 import queue
 from threading import Thread
+import random
 
 from src.news_processor import NewsProcessor
 from src.dialogue_generator import DialogueGenerator
@@ -22,19 +23,15 @@ def parse_arguments():
     return parser.parse_args()
 
 def play_dialogues(speeches, visualiser, voice_generator, audio_player):
-    """Utility function to play dialogues (either generated or dummy).
-    Returns after all dialogues are played."""
-    # Re-init display for dialogues
+    """Play dialogues (list of text strings) by generating voice and playing them."""
     visualiser.init_display()
 
     speech_queue = queue.Queue()
     gen_thread = Thread(target=voice_generator.generate_to_queue, args=(speeches, speech_queue))
     gen_thread.start()
 
-    # This will block until dialogues are done (when None is received)
     audio_player.play_from_queue(speech_queue)
 
-    # After done, close the visualiser to avoid freezing during music
     visualiser.quit_display()
 
 def play_pre_recorded_dialogues(files_and_speakers, visualiser, audio_player):
@@ -50,31 +47,38 @@ def play_pre_recorded_dialogues(files_and_speakers, visualiser, audio_player):
 
     visualiser.quit_display()
 
-def main():
-    args = parse_arguments()
-    dummy_mode = args.dummy
+def build_initial_queue(dummy_mode, spotify_handler, news_processor=None, dialogue_generator=None):
+    """
+    Build an initial queue of items to play.
+    For now, we hardcode:
+    1. Conversation about a random news article from The Verge (if not dummy)
+    2. One track from a playlist
+    3. Conversation about that track
+    4. Another track
+    etc.
 
-    visualiser = Visualiser()
-    audio_player = AudioPlayer(visualiser=visualiser)
-    voice_generator = VoiceGenerator()
+    Each queue item is a dict:
+    { "type": "conversation", "data": [list_of_speeches] }
+    or
+    { "type": "song", "data": {"uri": spotify_uri, "name":..., "artist":...} }
 
-    spotify_handler = SpotifyHandler(username="leo.camacho1738")
+    In dummy mode, we just load some dummy speeches and alternate with tracks.
+    """
+    play_queue = []
 
     if dummy_mode:
-        print("Running in dummy mode...")
-
-        # Load the speeches from ./speeches
+        # Load dummy speeches from ./speeches
         speeches_folder = "./speeches"
         if not os.path.isdir(speeches_folder):
             print(f"Speeches folder not found at {speeches_folder}")
-            return
+            sys.exit(1)
 
         speech_files = sorted([f for f in os.listdir(speeches_folder) if f.endswith('.mp3')])
         if not speech_files:
             print("No speech files found in the speeches folder.")
-            return
+            sys.exit(1)
 
-        # Assign speakers based on filename
+        # Convert them into conversation queue items
         dummy_speeches = []
         for f in speech_files:
             speaker = 'default'
@@ -85,49 +89,82 @@ def main():
                 speaker = 'mollie'
             dummy_speeches.append((os.path.join(speeches_folder, f), speaker))
 
-        # Play all dummy speeches (conversation)
-        play_pre_recorded_dialogues(dummy_speeches, visualiser, audio_player)
+        # We'll put them in one conversation item
+        play_queue.append({
+            "type": "conversation_pre_recorded",
+            "data": dummy_speeches
+        })
 
-        # After finishing conversation, play a Spotify track
+        # Then add a random top track
         random_song = spotify_handler.get_random_top_song()
-        print(f"\nNow playing: {random_song['name']} by {random_song['artist']}")
-        spotify_handler.play_track(random_song['uri'])
+        play_queue.append({
+            "type": "song",
+            "data": random_song
+        })
 
-        end_dialogue_generated = False
+        # Add a conversation about next upcoming track
+        # We'll dynamically generate this later when we know the next track
+        # For now, just leave two items: conversation, track.
+        # We'll loop and add more items as we go if needed.
 
-        while True:
-            remaining_time = spotify_handler.get_remaining_time()
+    else:
+        # Normal mode: 
+        # Assume user selection and summarisation has happened outside or call it here
+        articles = news_processor.get_latest_articles()
+        if not articles:
+            print("No articles found. Please try again.")
+            sys.exit(1)
 
-            if remaining_time is None:
-                print("Playback stopped")
-                break
+        # Pick a random article from The Verge (for now)
+        # Or let user pick one
+        # Let's just pick a random article:
+        selected_article = random.choice(articles)
+        summarised_article = news_processor.summarise_selected_article(selected_article)
+        
+        # Pick a random song
+        random_song = spotify_handler.get_random_top_song()
+        dialogues = dialogue_generator.generate_dialogue(summarised_article, random_song)
 
-            # When less than 10s left, play short dialogue about next track
-            if remaining_time < 10000 and not end_dialogue_generated:
-                next_song = spotify_handler.get_random_top_song()
-                while next_song['uri'] == random_song['uri']:
-                    next_song = spotify_handler.get_random_top_song()
+        # Add a conversation item
+        play_queue.append({
+            "type": "conversation",
+            "data": dialogues
+        })
 
-                end_speeches = [
-                    "That was a great track, wasn't it?",
-                    f"Up next, we have {next_song['name']} by {next_song['artist']}"
-                ]
+        # Add the track item
+        play_queue.append({
+            "type": "song",
+            "data": random_song
+        })
 
-                # Play these end_of_song dialogues
-                # Use play_dialogues to ensure blocking until done
-                play_dialogues(end_speeches, visualiser, voice_generator, audio_player)
+        # Later we can add end-of-song dialogues and next track dynamically
 
-                print(f"\nNext up: {next_song['name']} by {next_song['artist']}")
-                spotify_handler.play_track(next_song['uri'])
-                end_dialogue_generated = True
+    return play_queue
 
-            if remaining_time < 500:
-                break
+def print_queue_status(play_queue, current_index):
+    """Helper function to print the current state of the queue."""
+    print("\n=== Current Queue Status ===")
+    print(f"Current index: {current_index}")
+    for i, item in enumerate(play_queue):
+        prefix = "→" if i == current_index else " "
+        if item["type"] == "song":
+            print(f"{prefix} {i}. [{item['type']}] {item['data']['name']} by {item['data']['artist']}")
+        else:
+            print(f"{prefix} {i}. [{item['type']}] {len(item['data'])} speeches")
+    print("========================\n")
 
-            # Here we are not updating the visualiser for the music track (no dialogues)
-            # The window is closed, so no freeze.
-            time.sleep(1)
+def main():
+    args = parse_arguments()
+    dummy_mode = args.dummy
 
+    visualiser = Visualiser()
+    audio_player = AudioPlayer(visualiser=visualiser)
+    voice_generator = VoiceGenerator()
+    spotify_handler = SpotifyHandler(username="leo.camacho1738")
+
+    if dummy_mode:
+        # Dummy mode: no article selection
+        play_queue = build_initial_queue(dummy_mode=True, spotify_handler=spotify_handler)
     else:
         # Normal mode
         source_selector = SourceSelector()
@@ -142,73 +179,117 @@ def main():
 
         dialogue_generator = DialogueGenerator()
 
-        articles = news_processor.get_latest_articles()
+        play_queue = build_initial_queue(
+            dummy_mode=False, 
+            spotify_handler=spotify_handler, 
+            news_processor=news_processor, 
+            dialogue_generator=dialogue_generator
+        )
 
-        if not articles:
-            print("No articles found. Please try again.")
-            return
+    
 
-        print("\nAvailable articles:")
-        for i, article in enumerate(articles, 1):
-            print(f"{i}: {article['title']} (from {article['source']})")
+    # Main loop: process items in the queue indefinitely
+    # Once we reach near the end of a song, we will add a next conversation and next track
+    current_index = 0
+    end_dialogue_generated = False
+    next_song_info = None
 
-        while True:
-            try:
-                selection = int(input("\nSelect an article number to listen to: ")) - 1
-                if 0 <= selection < len(articles):
-                    selected_article = articles[selection]
+    print_queue_status(play_queue, current_index)
+
+    while True:
+        if current_index >= len(play_queue):
+            # Rebuild or add more items to the queue if needed
+            # For now, just break or re-initialise:
+            print("Queue ended. Re-building the queue...")
+            # Could add logic to refill or pick new items:
+            if dummy_mode:
+                # Just pick a new random track and end dialogues
+                random_song = spotify_handler.get_random_top_song()
+                play_queue.append({"type": "song", "data": random_song})
+            else:
+                # In normal mode, let's pick a new article and a new track:
+                articles = news_processor.get_latest_articles()
+                if articles:
+                    selected_article = random.choice(articles)
+                    summarised_article = news_processor.summarise_selected_article(selected_article)
+                    random_song = spotify_handler.get_random_top_song()
+                    dialogues = dialogue_generator.generate_dialogue(summarised_article, random_song)
+                    play_queue.append({"type": "conversation", "data": dialogues})
+                    play_queue.append({"type": "song", "data": random_song})
+            current_index = 0
+            print_queue_status(play_queue, current_index)
+
+        item = play_queue[current_index]
+        current_index += 1
+
+        if item["type"] == "conversation":
+            # item["data"] is a list of speeches
+            print("\nPlaying conversation:")
+            for idx, speech in enumerate(item["data"], start=1):
+                print(f"Speaker {idx}: {speech}")
+            play_dialogues(item["data"], visualiser, voice_generator, audio_player)
+            end_dialogue_generated = False
+
+        elif item["type"] == "conversation_pre_recorded":
+            # item["data"] is a list of (file, speaker)
+            print("\nPlaying pre-recorded conversation:")
+            play_pre_recorded_dialogues(item["data"], visualiser, audio_player)
+            end_dialogue_generated = False
+
+        elif item["type"] == "song":
+            song = item["data"]
+            print(f"\nNow playing: {song['name']} by {song['artist']}")
+            spotify_handler.play_track(song['uri'])
+            print_queue_status(play_queue, current_index)
+            end_dialogue_generated = False
+            # Wait for the track to nearly finish, then inject next conversation and track
+            while True:
+                remaining_time = spotify_handler.get_remaining_time()
+                if remaining_time is None:
+                    print("Playback stopped unexpectedly.")
                     break
-                print("Invalid selection. Please try again.")
-            except ValueError:
-                print("Please enter a valid number.")
 
-        random_song = spotify_handler.get_random_top_song()
-        summarised_article = news_processor.summarise_selected_article(selected_article)
-        print(f"\nSummarised article: {summarised_article}")
-
-        speeches = dialogue_generator.generate_dialogue(summarised_article, random_song)
-        print(f"\nGenerated speeches: {speeches}")
-
-        # Play main dialogues
-        play_dialogues(speeches, visualiser, voice_generator, audio_player)
-
-        print(f"\nNow playing: {random_song['name']} by {random_song['artist']}")
-        spotify_handler.play_track(random_song['uri'])
-
-        end_dialogue_generated = False
-        while True:
-            remaining_time = spotify_handler.get_remaining_time()
-
-            if remaining_time is None:
-                print("Playback stopped")
-                break
-
-            if remaining_time < 10000 and not end_dialogue_generated:
-                next_song = spotify_handler.get_random_top_song()
-                while next_song['uri'] == random_song['uri']:
+                if remaining_time < 10000 and not end_dialogue_generated:
+                    # Time to queue a conversation about this track and a next track
                     next_song = spotify_handler.get_random_top_song()
+                    while next_song and next_song['uri'] == song['uri']:
+                        next_song = spotify_handler.get_random_top_song()
 
-                song_dialogue = dialogue_generator.generate_song_dialogue(
-                    random_song['name'],
-                    random_song['artist'],
-                    next_song['name'],
-                    next_song['artist']
-                )
+                    # If not dummy, generate a dialogue about the song:
+                    if not dummy_mode:
+                        # We have dialogue_generator from above
+                        # If we started in dummy mode, no dialogue_generator is available
+                        # Just skip if dummy
+                        song_dialogue = dialogue_generator.generate_song_dialogue(
+                            song['name'], song['artist'],
+                            next_song['name'], next_song['artist']
+                        )
+                        # Insert the conversation and next track after the current index
+                        play_queue.insert(current_index, {"type": "song", "data": next_song})
+                        play_queue.insert(current_index, {"type": "conversation", "data": song_dialogue})
+                        print_queue_status(play_queue, current_index)
+                    else:
+                        # Dummy mode: just a simple conversation
+                        end_speeches = [
+                            "That was a great track, wasn't it?",
+                            f"Up next, we have {next_song['name']} by {next_song['artist']}"
+                        ]
+                        play_queue.insert(current_index, {"type": "song", "data": next_song})
+                        play_queue.insert(current_index, {"type": "conversation", "data": end_speeches})
 
-                print("\nGenerating end-of-song dialogue...")
+                    end_dialogue_generated = True
+                    print_queue_status(play_queue, current_index)
 
-                # Play end_of_song dialogues
-                play_dialogues(song_dialogue, visualiser, voice_generator, audio_player)
+                if remaining_time is not None and remaining_time < 1000:
+                    # Track finished
+                    break
 
-                print(f"\nNext up: {next_song['name']} by {next_song['artist']}")
-                spotify_handler.play_track(next_song['uri'])
-                end_dialogue_generated = True
+                time.sleep(1)
 
-            if remaining_time < 500:
-                break
+        else:
+            print(f"Unknown queue item type: {item['type']}")
 
-            # Again, no dialogues here, visualiser is closed. No freeze.
-            time.sleep(1)
+    # End main while True
 
 if __name__ == "__main__":
     main()

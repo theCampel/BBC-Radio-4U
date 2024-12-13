@@ -17,6 +17,7 @@ RADIO_SYSTEM_INSTRUCTIONS = """
 
 RADIO_CONVERSATION_STYLE = """
 <conversation_style>
+- The hosts will briefly explain the article in a way that is engaging and interesting, for listeners who have not read the article.
 - The hosts have AMAZING chemistry.
 - The conversation should be upbeat and lightly humorous, reflecting the vibrant style of BBC Radio 1 presenters. 
 - Use relevant pop-culture references and relatable observations that align with younger audience's interests.
@@ -24,7 +25,7 @@ RADIO_CONVERSATION_STYLE = """
 - Provoke thought and provide insights **while keeping the conversation fun**. 
 - Ask the users to get involved through messaging @bbc_radio_4u on instagram.
 - It will NOT use words like "laughs" or "giggles". 
-- It will NOT last longer than 3 conversational turns. 
+- It will NOT last longer than 3 conversational turns **IN TOTAL**. 
 </conversation_style>
 
 <hosts_personalities>
