@@ -62,7 +62,7 @@ def build_initial_queue(dummy_mode, spotify_handler, news_processor=None):
     played_songs = []  # Keep track of songs played so we don't repeat
 
     # Hardcoded playlist ID as requested
-    playlist_id = "0NvNQWJaSUTBTQjhjWbNfL
+    playlist_id = "0NvNQWJaSUTBTQjhjWbNfL"
 
     def get_unique_random_song():
         song = spotify_handler.get_random_playlist_song(playlist_id, played_songs)
