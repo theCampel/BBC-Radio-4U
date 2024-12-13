@@ -17,6 +17,9 @@ from src.visualiser import Visualiser
 
 load_dotenv()
 
+PLAYLIST_ID = "0NvNQWJaSUTBTQjhjWbNfL"
+SONGS_PER_BLOCK = 3
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Run the customised radio station.')
     parser.add_argument('--dummy', action='store_true', help='Run in dummy mode using pre-recorded speeches.')
@@ -44,41 +47,33 @@ def play_pre_recorded_dialogues(files_and_speakers, visualiser, audio_player):
     q.put(None)
 
     audio_player.play_from_queue(q)
-
     visualiser.quit_display()
 
-def build_initial_queue(dummy_mode, spotify_handler, news_processor=None):
+def get_unique_random_song(spotify_handler, played_songs):
+    song = spotify_handler.get_random_playlist_song(PLAYLIST_ID, played_songs)
+    if song is None:
+        print("No more unique songs found in the playlist. Exiting.")
+        sys.exit(1)
+    played_songs.append(song['uri'])
+    return song
+
+def expand_queue(play_queue, dummy_mode, spotify_handler, news_processor, dialogue_generator,
+                 played_songs, articles_list, used_articles):
     """
-    Build the initial queue of items to play according to the new specification:
-    - 3 songs (random from given playlist), 
-    - a conversation placeholder for describing the 3rd song,
-    - another 3 songs (random from the same playlist, no repeats),
-    - a conversation placeholder for describing a random article from The Verge.
+    Expand the queue with the pattern:
+    - 3 new songs
+    - conversation placeholder about 3rd song
+    - 3 new songs
+    - conversation placeholder about a new article (not used before)
 
-    No actual GPT or audio generation here - just placeholders.
+    Do not generate conversations now, only placeholders.
     """
-
-    play_queue = []
-    played_songs = []  # Keep track of songs played so we don't repeat
-
-    # Hardcoded playlist ID as requested
-    playlist_id = "0NvNQWJaSUTBTQjhjWbNfL"
-
-    def get_unique_random_song():
-        song = spotify_handler.get_random_playlist_song(playlist_id, played_songs)
-        if song is None:
-            print("No more unique songs found in the playlist. Exiting.")
-            sys.exit(1)
-        played_songs.append(song['uri'])
-        return song
-
-    # First 3 songs
-    first_3_songs = [get_unique_random_song() for _ in range(3)]
+    # Get 3 songs
+    first_3_songs = [get_unique_random_song(spotify_handler, played_songs) for _ in range(3)]
     for s in first_3_songs:
         play_queue.append({"type": "song", "data": s})
 
-    # Conversation placeholder about the 3rd song
-    # We store the needed info in the placeholder, but do not generate yet.
+    # Placeholder about 3rd song
     third_song = first_3_songs[-1]
     play_queue.append({
         "type": "conversation_placeholder",
@@ -90,29 +85,29 @@ def build_initial_queue(dummy_mode, spotify_handler, news_processor=None):
     })
 
     # Next 3 songs
-    next_3_songs = [get_unique_random_song() for _ in range(3)]
+    next_3_songs = [get_unique_random_song(spotify_handler, played_songs) for _ in range(3)]
     for s in next_3_songs:
         play_queue.append({"type": "song", "data": s})
 
-    # Conversation placeholder for a random article
-    # We pick the article now (random from The Verge or from processed articles),
-    # but we won't generate the conversation until it's needed.
-    if not dummy_mode and news_processor:
-        articles = news_processor.get_latest_articles()
-        if not articles:
-            print("No articles found for news conversation. Please try again.")
-            sys.exit(1)
-        selected_article = random.choice(articles)
-        play_queue.append({
-            "type": "conversation_placeholder",
-            "data": {
-                "type": "news_description",
-                "article": selected_article
-            }
-        })
+    # Placeholder for a news article
+    if not dummy_mode and articles_list:
+        # Filter out used articles
+        available_articles = [a for a in articles_list if a['link'] not in used_articles]
+        if not available_articles:
+            print("No more unused articles left.")
+            # We can skip adding news placeholder if no articles left
+        else:
+            selected_article = random.choice(available_articles)
+            used_articles.add(selected_article['link'])
+            play_queue.append({
+                "type": "conversation_placeholder",
+                "data": {
+                    "type": "news_description",
+                    "article": selected_article
+                }
+            })
     else:
-        # Dummy mode or no news_processor: just skip article conversation
-        # Or add a dummy placeholder if desired
+        # Dummy or no articles
         play_queue.append({
             "type": "conversation_placeholder",
             "data": {
@@ -120,20 +115,26 @@ def build_initial_queue(dummy_mode, spotify_handler, news_processor=None):
                 "article": {
                     "title": "Dummy Article",
                     "summary": "This is a dummy summary",
-                    "link": "http://example.com",
+                    "link": "http://example.com/dummy",
                     "full_text": "This is dummy full text."
                 }
             }
         })
 
-    return play_queue, played_songs
+def build_initial_queue(dummy_mode, spotify_handler, news_processor, played_songs, articles_list, used_articles):
+    """
+    Build the initial queue with the specified pattern.
+    """
+    play_queue = []
+    expand_queue(play_queue, dummy_mode, spotify_handler, news_processor, None, played_songs, articles_list, used_articles)
+    return play_queue
 
 def print_queue_status(play_queue, current_index):
     """Helper function to print the current state of the queue."""
     print("\n=== Current Queue Status ===")
     print(f"Current index: {current_index}")
     for i, item in enumerate(play_queue):
-        prefix = "→" if i == current_index - 1 else " "
+        prefix = "→" if i == current_index-1 else " "
         if item["type"] == "song":
             print(f"{prefix} {i+1}. [song] {item['data']['name']} by {item['data']['artist']}")
         elif item["type"] == "conversation":
@@ -149,14 +150,12 @@ def print_queue_status(play_queue, current_index):
 def generate_conversation_from_placeholder(placeholder_data, dialogue_generator):
     """
     Given a placeholder data dict, generate the actual conversation text.
-    This is where we call GPT-4 to create the conversation right before playing.
     """
     ctype = placeholder_data["type"]
     if ctype == "song_description":
         # Generate a short dialogue describing the song that just ended.
         song_name = placeholder_data["song_name"]
         artist = placeholder_data["artist"]
-        # Generate a very short conversation about the song
         speeches = dialogue_generator.generate_song_dialogue(song_name, artist)
         return speeches
 
@@ -164,13 +163,30 @@ def generate_conversation_from_placeholder(placeholder_data, dialogue_generator)
         # Generate a dialogue about the selected article
         article = placeholder_data["article"]
         summarised_article = dialogue_generator.summarise_article_for_dialogue(article)
-        # We'll pass no next song here, just a generic news chat
         speeches = dialogue_generator.generate_dialogue_for_news(summarised_article)
         return speeches
 
     else:
-        # Should never get here
+        # Fallback
         return ["MATT: I'm not sure what to talk about.", "MOLLIE: Me neither."]
+
+def pre_generate_next_conversation_if_needed(play_queue, current_index, dialogue_generator, dummy_mode):
+    """
+    If the next item after the currently playing song is a conversation_placeholder,
+    generate it now (before the song ends), but do not play it yet.
+    Just convert it to a 'conversation' item with the speeches ready.
+    """
+    if current_index < len(play_queue):
+        next_item = play_queue[current_index]
+        if next_item["type"] == "conversation_placeholder":
+            # Generate now
+            if not dummy_mode and dialogue_generator:
+                speeches = generate_conversation_from_placeholder(next_item["data"], dialogue_generator)
+            else:
+                # Dummy or no generator
+                speeches = ["MATT: Placeholder conversation.", "MOLLIE: Placeholder conversation."]
+            next_item["type"] = "conversation"
+            next_item["data"] = speeches
 
 def main():
     args = parse_arguments()
@@ -181,63 +197,69 @@ def main():
     voice_generator = VoiceGenerator()
     spotify_handler = SpotifyHandler(username="leo.camacho1738")
 
+    used_articles = set()  # Keep track of articles we've used
+    played_songs = []      # Keep track of songs we've played
+
     if dummy_mode:
-        # Dummy mode: no article selection
-        # We still need to build initial queue as per instructions
-        play_queue, played_songs = build_initial_queue(dummy_mode=True, spotify_handler=spotify_handler, news_processor=None)
+        # Dummy mode: no article selection, no dialogue generation needed
+        news_processor = None
         dialogue_generator = None
+        articles_list = []
     else:
         # Normal mode
+        # In the original, we had a source_selector, but instructions do not show usage now.
+        # We'll assume we just get and process sources automatically. 
+        # If needed, reintroduce source_selector logic.
         news_processor = NewsProcessor()
+        articles_list = news_processor.get_latest_articles()
+        if not articles_list:
+            print("No articles found. Proceeding with dummy article placeholders.")
+            articles_list = []
         dialogue_generator = DialogueGenerator()
 
-        play_queue, played_songs = build_initial_queue(
-            dummy_mode=False,
-            spotify_handler=spotify_handler,
-            news_processor=news_processor
-        )
-
+    # Build initial queue
+    play_queue = build_initial_queue(dummy_mode, spotify_handler, news_processor, played_songs, articles_list, used_articles)
     current_index = 0
     print_queue_status(play_queue, current_index)
-
-    # When a conversation_placeholder is reached, we generate the conversation
-    # right there. When a song is about to finish, we may dynamically add more items.
-    # However, the instructions now only say we have the initial queue as described.
-    # We can still handle end-of-song logic if needed, but let's focus on the requested initialization.
 
     while True:
         if current_index >= len(play_queue):
             print("Queue ended. No more items.")
             break
 
+        # Check if we need to expand the queue soon (when only 2 items left)
+        # 2 items left means: if len(play_queue) - current_index < 3
+        # Because we are about to play one item and then only 2 remain
+        if (len(play_queue) - current_index) < 3:
+            # Expand the queue
+            expand_queue(play_queue, dummy_mode, spotify_handler, news_processor, dialogue_generator, played_songs, articles_list, used_articles)
+            print("Expanded the queue because we were running low on items.")
+            print_queue_status(play_queue, current_index)
+
         item = play_queue[current_index]
         current_index += 1
 
         if item["type"] == "conversation":
-            # Already generated conversation (if any)
+            # Play the conversation
             print("\nPlaying conversation:")
             for idx, speech in enumerate(item["data"], start=1):
                 print(f"Speaker {idx}: {speech}")
             play_dialogues(item["data"], visualiser, voice_generator, audio_player)
 
         elif item["type"] == "conversation_pre_recorded":
-            # item["data"] is a list of (file, speaker)
             print("\nPlaying pre-recorded conversation:")
             play_pre_recorded_dialogues(item["data"], visualiser, audio_player)
 
         elif item["type"] == "conversation_placeholder":
-            # Generate the conversation now
+            # If we ever hit a placeholder un-generated (which shouldn't happen now),
+            # Generate on the fly and play:
+            print("Warning: conversation_placeholder reached without pre-generation.")
             if not dummy_mode and dialogue_generator:
                 speeches = generate_conversation_from_placeholder(item["data"], dialogue_generator)
             else:
-                # Dummy or no generator
-                # Just a dummy conversation
-                speeches = ["MATT: This is a placeholder.", "MOLLIE: Indeed, a placeholder conversation."]
-            # Replace this item in the queue with a generated conversation
+                speeches = ["MATT: Placeholder", "MOLLIE: Placeholder"]
             item["type"] = "conversation"
             item["data"] = speeches
-
-            # Play it immediately (since we are at this index)
             print("\nPlaying generated conversation:")
             for idx, speech in enumerate(speeches, start=1):
                 print(f"Speaker {idx}: {speech}")
@@ -249,20 +271,22 @@ def main():
             spotify_handler.play_track(song['uri'])
             print_queue_status(play_queue, current_index)
 
-            # Monitor the song playback until it finishes
-            # In the instructions, generating conversation and audio at the end of the preceding 
-            # song is required for transitions. 
-            # Since we already have placeholders set up, we just let the song play.
-            # If needed, we could do advanced logic here to generate next items dynamically,
-            # but the instructions only specified the initial queue structure.
-            
+            # While playing, we check if the next item is a conversation_placeholder
+            # If yes, generate it during the last ~10 seconds of the current song.
+            conversation_prepared = False
+
             while True:
                 remaining_time = spotify_handler.get_remaining_time()
                 if remaining_time is None:
                     print("Playback stopped unexpectedly.")
                     break
 
-                if remaining_time < 4000: # Milliseconds
+                # If close to end of song and next is conversation_placeholder (not yet generated), generate it now
+                if remaining_time < 10000 and not conversation_prepared:
+                    pre_generate_next_conversation_if_needed(play_queue, current_index, dialogue_generator, dummy_mode)
+                    conversation_prepared = True
+
+                if remaining_time < 4000:
                     # Track finished
                     break
 
