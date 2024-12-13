@@ -10,9 +10,8 @@ class VoiceGenerator:
             'mollie': 'nova'
         }
 
-    def generate_speech_files(self, speeches):
-        """Generate audio files from speeches and return list of file paths."""
-        generated_files = []
+    def generate_to_queue(self, speeches, output_queue):
+        """Generate audio files from speeches and put them into a queue as they become available."""
         for i, speech in enumerate(speeches):
             voice_type = 'matt' if i % 2 == 0 else 'mollie'
             response = self.client.audio.speech.create(
@@ -21,11 +20,15 @@ class VoiceGenerator:
                 input=speech,
             )
 
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+            # Name temp file with speaker info for clarity
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{voice_type}.mp3")
             for chunk in response.iter_bytes():
                 temp_file.write(chunk)
             temp_file.flush()
             temp_file.close()
 
-            generated_files.append(temp_file.name)
-        return generated_files
+            # Put filename and speaker to queue
+            output_queue.put((temp_file.name, voice_type))
+
+        # Signal no more speeches
+        output_queue.put(None)
