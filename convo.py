@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import os
 import json
 import base64
@@ -22,7 +20,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 REALTIME_MODEL = "gpt-4o-mini-realtime-preview-2024-12-17"
 
 VOICE_NAME = "alloy"
-USE_SERVER_SIDE_VAD = True
 
 SAMPLE_RATE = 24000
 CHANNELS = 1
