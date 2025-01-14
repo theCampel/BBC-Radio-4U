@@ -8,3 +8,5 @@ feedparser
 beautifulsoup4
 requests
 spotipy
+aiortc
+requests

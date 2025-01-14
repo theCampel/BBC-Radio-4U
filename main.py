@@ -131,20 +131,51 @@ def build_initial_queue(dummy_mode, spotify_handler, news_processor, played_song
 
 def print_queue_status(play_queue, current_index):
     """Helper function to print the current state of the queue."""
+    # Clear console (works on both Windows and Unix-like systems)
+    os.system('cls' if os.name == 'nt' else 'clear')
+    
     print("\n=== Current Queue Status ===")
     print(f"Current index: {current_index}")
     for i, item in enumerate(play_queue):
         prefix = "→" if i == current_index-1 else " "
+        
         if item["type"] == "song":
-            print(f"{prefix} {i+1}. [song] {item['data']['name']} by {item['data']['artist']}")
+            print(f"{prefix} {i+1}. [Song] {item['data']['name']} by {item['data']['artist']}")
+        
         elif item["type"] == "conversation":
-            print(f"{prefix} {i+1}. [conversation] {len(item['data'])} speeches")
+            # For generated conversations, show what they're talking about
+            if 'type' in item.get('data_context', {}):
+                if item['data_context']['type'] == 'song_description':
+                    song = item['data_context']['song_name']
+                    artist = item['data_context']['artist']
+                    print(f"{prefix} {i+1}. [Conversation] About '{song}' by {artist}")
+                elif item['data_context']['type'] == 'news_description':
+                    title = item['data_context']['article']['title']
+                    if len(title) > 50:
+                        title = title[:47] + "..."
+                    print(f"{prefix} {i+1}. [Conversation] About news: {title}")
+            else:
+                print(f"{prefix} {i+1}. [Conversation] {len(item['data'])} lines of dialogue")
+        
         elif item["type"] == "conversation_pre_recorded":
-            print(f"{prefix} {i+1}. [conversation_pre_recorded] {len(item['data'])} files")
+            print(f"{prefix} {i+1}. [Pre-recorded Conversation] {len(item['data'])} files")
+        
         elif item["type"] == "conversation_placeholder":
-            print(f"{prefix} {i+1}. [conversation_placeholder] {item['data']['type']}")
+            if item["data"]["type"] == "song_description":
+                song_name = item["data"]["song_name"]
+                artist = item["data"]["artist"]
+                print(f"{prefix} {i+1}. [Upcoming Conversation] About '{song_name}' by {artist}")
+            
+            elif item["data"]["type"] == "news_description":
+                article = item["data"]["article"]
+                title = article["title"]
+                if len(title) > 50:
+                    title = title[:47] + "..."
+                print(f"{prefix} {i+1}. [Upcoming Conversation] News: {title}")
+        
         else:
             print(f"{prefix} {i+1}. [{item['type']}]")
+    
     print("========================\n")
 
 def generate_conversation_from_placeholder(placeholder_data, dialogue_generator):
@@ -185,6 +216,9 @@ def pre_generate_next_conversation_if_needed(play_queue, current_index, dialogue
             else:
                 # Dummy or no generator
                 speeches = ["MATT: Placeholder conversation.", "MOLLIE: Placeholder conversation."]
+            
+            # Preserve the context of what the conversation is about
+            next_item["data_context"] = next_item["data"]
             next_item["type"] = "conversation"
             next_item["data"] = speeches
 
@@ -267,9 +301,9 @@ def main():
 
         elif item["type"] == "song":
             song = item["data"]
-            print(f"\nNow playing: {song['name']} by {song['artist']}")
             spotify_handler.play_track(song['uri'])
             print_queue_status(play_queue, current_index)
+            print(f"\nNow playing: {song['name']} by {song['artist']}")
 
             # While playing, we check if the next item is a conversation_placeholder
             # If yes, generate it during the last ~10 seconds of the current song.

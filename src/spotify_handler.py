@@ -32,10 +32,10 @@ class SpotifyHandler:
             tracks.extend(results['items'])
         
         # Filter only tracks (not episodes, local tracks, etc.)
-        tracks = [t for t in tracks if t['track'] and t['track']['type'] == 'track']
+        tracks = [track for track in tracks if track['track'] and track['track']['type'] == 'track']
 
         # Filter out tracks that have been played
-        available_tracks = [t for t in tracks if t['track']['uri'] not in played_songs]
+        available_tracks = [track for track in tracks if track['track']['uri'] not in played_songs]
 
         if not available_tracks:
             return None
@@ -68,3 +68,15 @@ class SpotifyHandler:
         progress_ms = playback['progress_ms']
         total_ms = playback['item']['duration_ms']
         return total_ms - progress_ms
+    
+    def search_for_song(self, song_name, artist_name):
+        """Search for a song by name and artist"""
+        results = self.sp.search(q=f'{song_name} artist:{artist_name}', type='track', limit=1)
+        return results['tracks']['items'][0]['uri'] if results['tracks']['items'] else None
+
+    def search_for_playlist(self, playlist_name):
+        """Search for a playlist by name"""
+        results = self.sp.search(q=playlist_name, type='playlist', limit=1)
+        return results
+        #return results['playlists']['items'][0]['uri'] if results['playlists']['items'] else None
+    
