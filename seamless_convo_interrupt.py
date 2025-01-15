@@ -35,34 +35,39 @@ def generate_fake_news_article():
     }
     return article
 
-def monitor_for_call(interrupt_event):
+def monitor_for_input(call_event, end_event):
     """
-    Continuously monitors user input. If user types 'call', set the interrupt event.
+    Monitors user input in a loop. 
+    - If user types 'call', sets call_event.
+    - If user types 'end', sets end_event and breaks (ends program).
     """
     while True:
         user_input = input().strip().lower()
+
         if user_input == "call":
             print("\n[Interrupt Triggered] User typed 'call'!")
-            interrupt_event.set()
+            call_event.set()
+
+        elif user_input == "end":
+            print("\n[End Triggered] User typed 'end'!")
+            end_event.set()
             break
 
-def play_phone_ring(ring_file):
+def play_end_call_sound():
     """
-    Plays the specified phone ringing/dialing audio and blocks until it finishes.
+    Plays echo_ends_call.wav in blocking mode, then quits the mixer.
     """
-    if not os.path.exists(ring_file):
-        print(f"Warning: {ring_file} not found!")
+    if not os.path.exists("speeches/echo_ends_call.wav"):
+        print("Warning: echo_ends_call.wav not found!")
         return
 
     pygame.mixer.init()
-    pygame.mixer.music.load(ring_file)
-    pygame.mixer.music.play()
+    sound = pygame.mixer.Sound("speeches/echo_ends_call.wav")
+    channel = pygame.mixer.Channel(9)  # Arbitrary separate channel for end-call sound
+    channel.play(sound)
 
-    # Wait until ring completes
-    while pygame.mixer.music.get_busy():
-        time.sleep(0.1)
-
-    pygame.mixer.music.stop()
+    while channel.get_busy():
+        time.sleep(0.05)
     pygame.mixer.quit()
 
 class InterruptibleAudioPlayer(AudioPlayer):
@@ -70,160 +75,164 @@ class InterruptibleAudioPlayer(AudioPlayer):
     Subclass of AudioPlayer that handles the 'call' interrupt with a 
     0.5s overlap between TTS and phone ring, then forcibly stops TTS.
     """
-    def __init__(self, visualiser, interrupt_event):
+    def __init__(self, visualiser, call_event, end_event):
         super().__init__(visualiser=visualiser)
-        self.interrupt_event = interrupt_event
-        self.ring_thread = None  # We'll store the ring thread here
+        self.call_event = call_event
+        self.end_event = end_event
 
     def _play_file(self, audio_file, speaker):
         """
-        Overridden to allow a speaker-dependent overlap with the phone ring
-        if the user types 'call'. After that overlap, TTS is forcibly stopped.
+        Overridden to:
+          - Use a dedicated channel (0) for TTS
+          - If user types 'call', start ring on channel (1) with 0.5s overlap
+          - Stop TTS channel, but do NOT stop ring
         """
-        # Initialize mixer if not already initialized
+        # Initialize pygame mixer if not yet initialized
         if not pygame.mixer.get_init():
             pygame.mixer.init()
-            
-        pygame.mixer.music.load(audio_file)
-        pygame.mixer.music.play()
+
+        # Load TTS as a pygame Sound
+        tts_sound = pygame.mixer.Sound(audio_file)
+        tts_channel = pygame.mixer.Channel(0)  # TTS on channel 0
+
+        # Start playing TTS
+        tts_channel.play(tts_sound)
         self.is_playing = True
 
         if self.visualiser:
             self.visualiser.set_current_audio(audio_file, speaker)
 
         ring_started = False
+        ring_channel = None
 
         while True:
-            pos_ms = pygame.mixer.music.get_pos()
-            if pos_ms == -1:
-                # Playback finished normally
+            # If TTS finished on its own, break
+            if not tts_channel.get_busy():
                 break
 
-            # If the user typed 'call' AND we haven't started the ring yet:
-            if self.interrupt_event.is_set() and not ring_started:
+            # If 'end' is typed, we break ASAP
+            if self.end_event.is_set():
+                break
+
+            # If 'call' is typed and ring hasn't started yet
+            if self.call_event.is_set() and not ring_started:
                 ring_started = True
-                
-                # Choose interrupt file and overlap time based on current speaker
-                if speaker == "matt":  # echo voice
+
+                # Choose correct ring audio based on current speaker
+                if speaker == "matt":  # Matt's voice
                     ring_file = "speeches/sage_interrupts.wav"
-                    overlap_time = 6.1
-                else:  # mollie/nova voice
+                    self.interrupt_wait_time = 5.5
+                else:  # Nova/Mollie's voice
                     ring_file = "speeches/echo_interrupts.wav"
-                    overlap_time = 5.4
+                    self.interrupt_wait_time = 5.8
 
-                # Start playing ring in background with appropriate file
-                self.ring_thread = threading.Thread(
-                    target=play_phone_ring, 
-                    args=(ring_file,),
-                    daemon=True
-                )
-                self.ring_thread.start()
+                if os.path.exists(ring_file):
+                    # Load ring audio and play on channel 1
+                    ring_sound = pygame.mixer.Sound(ring_file)
+                    ring_channel = pygame.mixer.Channel(1)
+                    ring_channel.play(ring_sound)
 
-                # Overlap for specified time
-                time.sleep(overlap_time)
+                # Overlap for 0.5s so it isn't jarring
+                time.sleep(0.5)
 
-                # Now forcibly stop the TTS
-                if pygame.mixer.get_init():  # Check if mixer is still initialized
-                    pygame.mixer.music.stop()
+                # Forcibly stop TTS
+                tts_channel.stop()
                 break
 
+            # Update visualiser if any
             if self.visualiser:
+                pos_ms = 0  # We don't have a direct pos in ms here, so set 0 or skip
                 self.visualiser.update(pos_ms)
 
             time.sleep(0.01)
 
-        # Cleanup
-        if pygame.mixer.get_init():  # Check if mixer is still initialized
-            pygame.mixer.music.stop()
-            pygame.mixer.music.unload()
-        self.is_playing = False
+        # Cleanup TTS
+        tts_channel.stop()
 
-        # If it's a temp file in /tmp or has 'tmp' in name, remove it
+        # If it's a temp file, remove it
         if audio_file.startswith('/tmp') or "tmp" in audio_file:
             try:
                 os.unlink(audio_file)
             except:
                 pass
 
-def play_conversation_until_interrupt(speeches, interrupt_event):
+        self.is_playing = False
+
+def play_conversation_until_interrupt(speeches, call_event, end_event, audio_player):
     """
-    Plays a TTS conversation. If 'call' is typed, we start the ring (in background),
-    wait 0.5s, stop TTS, and exit.
-    Returns True if TTS ended normally, False if interrupted.
+    Plays a TTS conversation in sequence.
+      - If 'call' is typed, ring starts on a separate channel for 0.5s overlap,
+        TTS is forcibly stopped, and we exit early.
+      - If 'end' is typed, exit immediately.
+
+    Returns:
+        (finished_normally [bool]) 
+        True if conversation ended with no 'call' interrupt,
+        False if it was interrupted by 'call'.
     """
-    visualiser = Visualiser()
-    audio_player = InterruptibleAudioPlayer(visualiser=visualiser, interrupt_event=interrupt_event)
     voice_generator = VoiceGenerator()
 
-    # We'll hold the ring_thread reference from the audio player after we finish
-    # so we can wait for it in the main function.
-    ring_thread_ref = None
-
+    # Queue for TTS audio
     q = queue.Queue()
-    
 
     def generate_audio():
         for i, speech in enumerate(speeches):
-            if interrupt_event.is_set():
+            if end_event.is_set():
                 break
-            # Alternate speakers
             speaker_label = "matt" if (i % 2 == 0) else "mollie"
             response = voice_generator.client.audio.speech.create(
                 model="tts-1",
                 voice=voice_generator.voice_mapping.get(speaker_label, "nova"),
                 input=speech,
             )
-
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{speaker_label}.mp3")
             for chunk in response.iter_bytes():
                 temp_file.write(chunk)
             temp_file.flush()
             temp_file.close()
-            
-            if not interrupt_event.is_set():
-                q.put((temp_file.name, speaker_label))
 
-        q.put(None)  # No more audio
+            if end_event.is_set():
+                break
+            q.put((temp_file.name, speaker_label))
+
+        q.put(None)  # End of TTS
 
     tts_thread = threading.Thread(target=generate_audio, daemon=True)
     tts_thread.start()
 
-    visualiser.init_display()
-    interrupted = False
+    audio_player.visualiser.init_display()
+    interrupted_by_call = False
 
     while True:
+        if end_event.is_set():
+            # 'end' typed => stop everything
+            interrupted_by_call = False
+            break
+
         item = q.get()
         if item is None:
-            # No more audio
+            # No more TTS in queue
             break
 
         audio_file, speaker = item
-
-        # If user typed 'call' before playing next file
-        if interrupt_event.is_set():
-            interrupted = True
-            break
-
         audio_player._play_file(audio_file, speaker)
 
-        # Check if ring started
-        if audio_player.ring_thread is not None:
-            # If the ring thread was started, it means we triggered "call"
-            interrupted = True
+        # If user typed 'call' during playback, we've forcibly stopped TTS
+        if call_event.is_set():
+            interrupted_by_call = True
             break
 
-    visualiser.quit_display()
+    audio_player.visualiser.quit_display()
     tts_thread.join(timeout=0.5)
 
-    ring_thread_ref = audio_player.ring_thread
-    return (not interrupted), ring_thread_ref
+    return not interrupted_by_call
 
 def launch_realtime_convo(context):
     """
-    Launches the realtime conversation from `convo.py` 
-    (blocking call). 
+    Launches the realtime conversation from `convo.py` (blocking call). 
     """
     new_env = os.environ.copy()
+    print(f"Launching real-time conversation with context: {context}")
     new_env["CUSTOM_CONTEXT"] = context
 
     print("\n[Launching Real-time Conversation in a separate subprocess...]\n")
@@ -232,49 +241,85 @@ def launch_realtime_convo(context):
 
 def main():
     """
-    1) Generate a fake news article & TTS conversation.
-    2) If user types 'call':
-       - Ring starts in background with 0.5s overlap
-       - TTS forcibly stops
-       - We wait for ring to fully finish
-       - Then launch the realtime conversation
+    1) Generate a fake radio-style conversation about a news story.
+    2) Play it until user possibly types 'call'.
+       - If 'call': ring plays on a separate channel with 0.5s overlap. 
+         Then TTS is cut off, ring continues. 
+       - Wait ~5–6s, then open the mic.
+    3) If user types 'end' at any time, end the program after playing echo_ends_call.wav.
     """
-    # 1) Prepare a "fake" news article
+    # Two events: one for 'call' interrupt, one for 'end'
+    call_event = threading.Event()
+    end_event = threading.Event()
+
+    # Initialize audio components
+    visualiser = Visualiser()
+    audio_player = InterruptibleAudioPlayer(
+        visualiser=visualiser, 
+        call_event=call_event,
+        end_event=end_event
+    )
+
+    # Monitor user input in a background thread
+    input_thread = threading.Thread(
+        target=monitor_for_input,
+        args=(call_event, end_event),
+        daemon=True
+    )
+    input_thread.start()
+
+    # 1) Prepare fake article
     article = generate_fake_news_article()
 
-    # 2) Generate radio-style conversation
+    # 2) Generate the conversation
     dialogue_generator = DialogueGenerator()
     summarised = dialogue_generator.summarise_article_for_dialogue(article)
     speeches = dialogue_generator.generate_dialogue_for_news(summarised)
 
-    # Real-time context
+    # Context for the real-time call
     context_for_realtime = (
         f"We were discussing a news story: {article['title']}.\n"
-        "Now, a listener is calling in to talk to Mollie in real time."
+        f"The following is the full text of the story: {article['full_text']}\n"
+        "Now, a listener is calling in to talk to host Mollie in real time."
     )
 
-    # Create an event that triggers if user types "call"
-    interrupt_event = threading.Event()
-    input_thread = threading.Thread(target=monitor_for_call, args=(interrupt_event,), daemon=True)
-    input_thread.start()
-
     # 3) Play conversation
-    finished_normally, ring_thread_ref = play_conversation_until_interrupt(speeches, interrupt_event)
+    finished_normally = play_conversation_until_interrupt(speeches, call_event, end_event, audio_player)
 
-    # 4) If interrupted, wait for the ring to complete, then open real-time
+    # If user typed 'end' at any point, we handle that now
+    if end_event.is_set():
+        print("\nUser ended the program. Playing end call sound and exiting.")
+        play_end_call_sound()
+        sys.exit(0)
+
+    # If user typed 'call', the conversation was interrupted
     if not finished_normally:
-        print("\n[AI conversation interrupted. Waiting for ring to finish...]\n")
-        
-        # ring_thread_ref is the thread that was playing the ring
-        if ring_thread_ref is not None:
-            ring_thread_ref.join()  # Wait for phone ring to fully finish
+        print("\n[TTS was interrupted by 'call'. Ring continues in background if it's still playing.]")
+        # Get the wait time that was set during interrupt
+        wait_time = audio_player.interrupt_wait_time
+        print(f"[Waiting {wait_time} seconds before opening the mic...]\n")
+        time.sleep(wait_time)
 
-        # Now that ring is done, launch real-time convo
+        # Check again if user ended during that wait
+        if end_event.is_set():
+            print("User ended the program before real-time convo started.")
+            play_end_call_sound()
+            sys.exit(0)
+
+        # Now launch real-time conversation
         launch_realtime_convo(context_for_realtime)
-    else:
-        print("\nNo interruption occurred; conversation finished normally.")
 
-    print("seamless_convo_interrupt.py: All done.")
+        # Once real-time convo returns, we assume user ends
+        play_end_call_sound()
+        sys.exit(0)
+
+    else:
+        # No 'call' interruption
+        print("\nNo interruption by 'call'. Conversation finished normally.")
+        # If user typed 'end' after TTS ended
+        if end_event.is_set():
+            play_end_call_sound()
+        print("seamless_convo_interrupt.py: All done.")
 
 if __name__ == "__main__":
     main()

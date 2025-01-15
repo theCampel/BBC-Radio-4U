@@ -1,3 +1,5 @@
+# convo.py
+
 import os
 import json
 import base64
@@ -16,10 +18,22 @@ from dotenv import load_dotenv
 ################################################################################
 
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-REALTIME_MODEL = "gpt-4o-mini-realtime-preview-2024-12-17"
 
-VOICE_NAME = "alloy"
+# Get API key from .env file
+api_key = os.getenv("OPENAI_API_KEY")
+if api_key is None:
+    raise ValueError("OPENAI_API_KEY not found in .env file")
+
+# Get custom context from environment
+custom_context = os.getenv("CUSTOM_CONTEXT", "No specific context provided.")
+
+# Format the prompt with the custom context
+SYSTEM_PROMPT = constants.REALTIME_MOLLIE_PROMPT.format(custom_context=custom_context)
+
+# Changed the model to match your other realtime examples
+REALTIME_MODEL = "gpt-4o-realtime-preview-2024-10-01"
+
+VOICE_NAME = "sage"
 
 SAMPLE_RATE = 24000
 CHANNELS = 1
@@ -59,25 +73,28 @@ ws_app = None
 
 def on_open(ws):
     print("WebSocket connection opened.")
+    print(f"Using system prompt: {SYSTEM_PROMPT}")
+
     # Send session update
     session_update = {
         "type": "session.update",
         "session": {
-            "modalities": ["audio", "text"],
-            "instructions": (
-                constants.REALTIME_MOLLIE_PROMPT
-            ),
+            # Fix #1: Include both text and audio in modalities
+            "modalities": ["text", "audio"],
+            "instructions": SYSTEM_PROMPT,
             "voice": VOICE_NAME,
             "input_audio_format": "pcm16",
             "output_audio_format": "pcm16",
-            # Server-side VAD
+            # Fix #3: Add create_response to ensure we actually get a reply
+            # Also loosen the threshold & silence_duration so it doesn't cut out too early
             "turn_detection": {
                 "type": "server_vad",
-                "threshold": 0.9,
+                "threshold": 0.5,
                 "prefix_padding_ms": 300,
-                "silence_duration_ms": 700
+                "silence_duration_ms": 1000,
+                "create_response": True
             },
-            "temperature": 0.7,
+            "temperature": 0.4,
         }
     }
     ws.send(json.dumps(session_update))
@@ -110,7 +127,6 @@ def on_message(ws, message):
         print()  # end the line
 
     elif event_type == "response.audio_transcript.delta":
-        # This is a partial transcript of the user’s speech.
         # Uncomment to see partial transcripts:
         # sys.stdout.write("\r[User partial] " + data["delta"])
         # sys.stdout.flush()
@@ -151,9 +167,10 @@ signal.signal(signal.SIGINT, signal_handler)
 def main():
     global ws_app
 
+    # Fix #2: Switch to the correct model in the WebSocket URL
     url = f"wss://api.openai.com/v1/realtime?model={REALTIME_MODEL}"
     headers = [
-        f"Authorization: Bearer {OPENAI_API_KEY}",
+        f"Authorization: Bearer {api_key}",
         "OpenAI-Beta: realtime=v1"
     ]
 
@@ -173,8 +190,9 @@ def main():
     ws_thread = threading.Thread(target=run_ws, daemon=True)
     ws_thread.start()
 
-    print("Recording from microphone. Speak to the AI co-hosts!")
-    print("Press Ctrl+C to exit.\n")
+    print("Recording from microphone. Speak to the AI co-host!\n"
+          "Ask something like: 'What's your name?' or 'What's the weather?' etc.\n"
+          "Press Ctrl+C to exit.\n")
 
     # Wait until we know the connection is open or it closed on error
     connected_event.wait()
@@ -192,18 +210,16 @@ def main():
             "audio": audio_b64
         }
 
-        # If the server or local code closed the socket, we'll catch an exception
         try:
             ws_app.send(json.dumps(message_obj))
         except websocket.WebSocketConnectionClosedException:
             print("Socket closed while sending audio.")
             break
 
-        # Tiny sleep to avoid a busy loop
+        # Tiny sleep to avoid busy-loop
         time.sleep(0.001)
 
     print("Main loop finished; cleaning up.")
-    # Cleanup happens in signal_handler or after loop
     if ws_app and ws_app.sock and ws_app.sock.connected:
         ws_app.close()
     mic_stream.stop_stream()
