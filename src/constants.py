@@ -80,12 +80,17 @@ SAMPLE_RATE = 24000  # Hz
 INTER_SPEECH_GAP = 0.3  # seconds
 
 # RSS Feed URLs
-DEFAULT_RSS_FEEDS = {       
-    '1': ('The Intercept', 'https://theintercept.com/feed/?lang=en'),
-    '2': ('The Guardian', 'https://www.theguardian.com/uk/rss'),
-    '3': ('TechCrunch', 'https://techcrunch.com/feed/'),
-    '4': ('Wired', 'https://www.wired.com/feed/rss'),
-    '5': ('The Verge', 'https://www.theverge.com/rss/index.xml'),
+# DEFAULT_RSS_FEEDS = {       
+#     '1': ('The Intercept', 'https://theintercept.com/feed/?lang=en'),
+#     '2': ('The Guardian', 'https://www.theguardian.com/uk/rss'),
+#     '3': ('TechCrunch', 'https://techcrunch.com/feed/'),
+#     '4': ('Wired', 'https://www.wired.com/feed/rss'),
+#     '5': ('The Verge', 'https://www.theverge.com/rss/index.xml'),
+# }
+
+DEFAULT_RSS_FEEDS = {
+    '1': ('TechCrunch', 'https://techcrunch.com/feed/'),
+    '2': ('The Verge', 'https://www.theverge.com/rss/index.xml'),
 }
 
 MAX_TOTAL_ARTICLES = 10

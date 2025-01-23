@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>My Radio Station - Realtime Call</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <h1>My Radio Station - Realtime Call</h1>
+
+  <div id="controls">
+    <button id="startRadioBtn">Start Radio</button>
+    <button id="startCallBtn">Start Call</button>
+    <button id="endCallBtn" disabled>End Call</button>
+  </div>
+
+  <!-- Only ONE canvas for the host (Mollie) wave -->
+  <div id="visualiser-container">
+    <div class="canvas-wrap">
+      <h3>Host Wave</h3>
+      <canvas id="hostCanvas" width="400" height="120"></canvas>
+    </div>
+  </div>
+
+  <pre id="textOutput"></pre>
+
+  <hr />
+
+  <h2>Queue</h2>
+  <div id="queueContainer">
+    <!-- We'll fill this with JS -->
+  </div>
+
+  <!-- Load app.js as a module -->
+  <script type="module" src="app.js"></script>
+</body>
+</html>

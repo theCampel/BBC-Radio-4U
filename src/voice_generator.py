@@ -7,7 +7,7 @@ class VoiceGenerator:
         self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.voice_mapping = {
             'matt': 'echo',
-            'mollie': 'sage'
+            'mollie': 'nova'
         }
 
     def generate_to_queue(self, speeches, output_queue):

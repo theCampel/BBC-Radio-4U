@@ -1,0 +1,68 @@
+body {
+    font-family: sans-serif;
+    margin: 20px;
+  }
+  
+  #controls {
+    margin-bottom: 1rem;
+    display: flex;
+    gap: 1rem;
+  }
+  
+  #visualiser-container {
+    margin-bottom: 1rem;
+  }
+  
+  .canvas-wrap {
+    border: 1px solid #ccc;
+    width: 400px;
+    height: 160px;
+    padding: 0.5rem;
+    background: #f5f5f5;
+  }
+  
+  canvas {
+    display: block;
+    background: #fff;
+  }
+  
+  #textOutput {
+    white-space: pre-wrap;
+    background: #fafafa;
+    border: 1px solid #ddd;
+    padding: 1rem;
+    max-width: 600px;
+    height: 150px;
+    overflow-y: auto;
+  }
+  
+  #queueContainer {
+    margin-top: 1rem;
+    border: 1px solid #ddd;
+    padding: 1rem;
+    max-width: 600px;
+    background: #fafafa;
+  }
+  
+  .queue-item {
+    margin-bottom: 0.5rem;
+    padding: 0.5rem;
+    background: #fff;
+    border-left: 4px solid #007bff;
+  }
+  
+  .queue-item.song {
+    border-left-color: #28a745;
+  }
+  
+  .queue-item.conversation {
+    border-left-color: #ffc107;
+  }
+  
+  /* highlight the current item in the queue */
+  .queue-item.current {
+    background-color: #e6f7ff; /* a light highlight color */
+    border-left-color: #007bff;
+    font-weight: bold;
+  }
+  

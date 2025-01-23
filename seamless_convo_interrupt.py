@@ -120,7 +120,7 @@ class InterruptibleAudioPlayer(AudioPlayer):
 
                 # Choose correct ring audio based on current speaker
                 if speaker == "matt":  # Matt's voice
-                    ring_file = "speeches/sage_interrupts.wav"
+                    ring_file = "speeches/nova_interrupts.wav"
                     self.interrupt_wait_time = 5.5
                 else:  # Nova/Mollie's voice
                     ring_file = "speeches/echo_interrupts.wav"

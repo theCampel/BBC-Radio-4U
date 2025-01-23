@@ -1,113 +1,200 @@
+# main.py
+
 import os
 import sys
-from dotenv import load_dotenv
-import argparse
+import json
 import time
 import queue
-from threading import Thread
 import random
+import asyncio
+import threading
+from threading import Thread
 
+from fastapi.concurrency import asynccontextmanager
+import websockets
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
+
+from src.spotify_handler import SpotifyHandler
 from src.news_processor import NewsProcessor
 from src.dialogue_generator import DialogueGenerator
 from src.voice_generator import VoiceGenerator
-from src.spotify_handler import SpotifyHandler
-from src.source_selector import SourceSelector
 from src.audio_player import AudioPlayer
-from src.visualiser import Visualiser
+from src.constants import REALTIME_MOLLIE_PROMPT
+
+# Additional imports for streaming TTS:
+import base64
+import pydub
+import tempfile
 
 load_dotenv()
+
+##############################################################################
+# GLOBALS
+##############################################################################
+
+app = FastAPI()
+
+app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 PLAYLIST_ID = "0NvNQWJaSUTBTQjhjWbNfL"
 SONGS_PER_BLOCK = 3
 
-def parse_arguments():
-    parser = argparse.ArgumentParser(description='Run the customised radio station.')
-    parser.add_argument('--dummy', action='store_true', help='Run in dummy mode using pre-recorded speeches.')
-    return parser.parse_args()
+radio_queue = []
+current_index = 0
+radio_running = False
+radio_thread = None
 
-def play_dialogues(speeches, visualiser, voice_generator, audio_player):
-    """Play dialogues (list of text strings) by generating voice and playing them."""
-    visualiser.init_display()
+used_articles = set()
+played_songs = []
+dummy_mode = False
 
-    speech_queue = queue.Queue()
-    gen_thread = Thread(target=voice_generator.generate_to_queue, args=(speeches, speech_queue))
-    gen_thread.start()
+spotify_handler = None
+news_processor = None
+dialogue_generator = None
+articles_list = []
+voice_generator = None
+audio_player = None
 
-    audio_player.play_from_queue(speech_queue)
+# NEW: We'll store the uvicorn event loop here so threads can schedule tasks on it
+UVICORN_LOOP = None
 
-    visualiser.quit_display()
+# Keep track of websockets for host TTS
+HOST_WS_CONNECTIONS = set()
 
-def play_pre_recorded_dialogues(files_and_speakers, visualiser, audio_player):
-    """Play a set of pre-recorded dialogues from a given list of (file, speaker)."""
-    visualiser.init_display()
+##############################################################################
+# INIT & LIFESPAN
+##############################################################################
 
-    q = queue.Queue()
-    for item in files_and_speakers:
-        q.put(item)
-    q.put(None)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global UVICORN_LOOP
+    UVICORN_LOOP = asyncio.get_event_loop()  # This is Uvicorn’s running event loop
+    init_services()
+    yield
+    # On shutdown, if needed, do cleanup
 
-    audio_player.play_from_queue(q)
-    visualiser.quit_display()
+def init_services():
+    """
+    Initialize Spotify, news, dialogue, TTS, etc.
+    """
+    global spotify_handler, news_processor, dialogue_generator
+    global articles_list, dummy_mode, voice_generator, audio_player
+
+    print("Running init_services()...")
+
+    # Attempt setting up Spotify
+    try:
+        sp = SpotifyHandler(username="leo.camacho1738")
+        _ = sp.get_remaining_time()  # test call
+        spotify_handler = sp
+        print("Spotify ready.")
+    except Exception as e:
+        print("Cannot init SpotifyHandler:", e)
+        dummy_mode = True
+        spotify_handler = None
+
+    # Attempt news+dialogue
+    if not dummy_mode:
+        try:
+            np = NewsProcessor()
+            arr = np.get_latest_articles()
+            if not arr:
+                arr = []
+                print("No articles found. Using dummy placeholders.")
+            dg = DialogueGenerator()
+            news_processor = np
+            dialogue_generator = dg
+            articles_list.extend(arr)
+            print(f"Loaded {len(arr)} articles; Dialogue gen ready.")
+        except Exception as e:
+            print("Error setting up news/dialogue:", e)
+            dummy_mode = True
+            news_processor = None
+            dialogue_generator = None
+
+    voice_generator = VoiceGenerator()
+    audio_player = AudioPlayer(visualiser=None)  # HEADLESS
+    print("Voice generator + audio player ready (headless).")
+
+
+##############################################################################
+# QUEUE EXPANSION + HELPERS
+##############################################################################
 
 def get_unique_random_song(spotify_handler, played_songs):
     song = spotify_handler.get_random_playlist_song(PLAYLIST_ID, played_songs)
     if song is None:
-        print("No more unique songs found in the playlist. Exiting.")
-        sys.exit(1)
+        print("No more unique songs found in the playlist.")
+        return None
     played_songs.append(song['uri'])
     return song
 
-def expand_queue(play_queue, dummy_mode, spotify_handler, news_processor, dialogue_generator,
-                 played_songs, articles_list, used_articles):
-    """
-    Expand the queue with the pattern:
-    - 3 new songs
-    - conversation placeholder about 3rd song
-    - 3 new songs
-    - conversation placeholder about a new article (not used before)
+def expand_queue(play_queue, dummy_mode, spotify_handler, news_processor,
+                 dialogue_generator, played_songs, articles_list, used_articles):
+    """3 songs -> conversation placeholder -> 3 songs -> conversation placeholder."""
+    block1 = []
+    for _ in range(3):
+        if not dummy_mode and spotify_handler:
+            s = get_unique_random_song(spotify_handler, played_songs)
+        else:
+            s = None
+        if not s:
+            s = {"name": "Fallback Song", "artist": "Fallback Artist", "uri": None}
+        block1.append(s)
 
-    Do not generate conversations now, only placeholders.
-    """
-    # Get 3 songs
-    first_3_songs = [get_unique_random_song(spotify_handler, played_songs) for _ in range(3)]
-    for s in first_3_songs:
+    for s in block1:
         play_queue.append({"type": "song", "data": s})
-
-    # Placeholder about 3rd song
-    third_song = first_3_songs[-1]
+    last_song = block1[-1]
     play_queue.append({
         "type": "conversation_placeholder",
         "data": {
             "type": "song_description",
-            "song_name": third_song["name"],
-            "artist": third_song["artist"]
+            "song_name": last_song["name"],
+            "artist": last_song["artist"]
         }
     })
 
-    # Next 3 songs
-    next_3_songs = [get_unique_random_song(spotify_handler, played_songs) for _ in range(3)]
-    for s in next_3_songs:
+    block2 = []
+    for _ in range(3):
+        if not dummy_mode and spotify_handler:
+            s = get_unique_random_song(spotify_handler, played_songs)
+        else:
+            s = None
+        if not s:
+            s = {"name": "Fallback Song", "artist": "Fallback Artist", "uri": None}
+        block2.append(s)
+
+    for s in block2:
         play_queue.append({"type": "song", "data": s})
 
-    # Placeholder for a news article
     if not dummy_mode and articles_list:
-        # Filter out used articles
-        available_articles = [a for a in articles_list if a['link'] not in used_articles]
-        if not available_articles:
-            print("No more unused articles left.")
-            # We can skip adding news placeholder if no articles left
-        else:
-            selected_article = random.choice(available_articles)
-            used_articles.add(selected_article['link'])
+        available = [a for a in articles_list if a['link'] not in used_articles]
+        if available:
+            sel = random.choice(available)
+            used_articles.add(sel['link'])
             play_queue.append({
                 "type": "conversation_placeholder",
                 "data": {
                     "type": "news_description",
-                    "article": selected_article
+                    "article": sel
+                }
+            })
+        else:
+            play_queue.append({
+                "type": "conversation_placeholder",
+                "data": {
+                    "type": "news_description",
+                    "article": {
+                        "title": "No More Real Articles",
+                        "summary": "No more articles left.",
+                        "link": "#",
+                        "full_text": "None left."
+                    }
                 }
             })
     else:
-        # Dummy or no articles
         play_queue.append({
             "type": "conversation_placeholder",
             "data": {
@@ -121,215 +208,366 @@ def expand_queue(play_queue, dummy_mode, spotify_handler, news_processor, dialog
             }
         })
 
-def build_initial_queue(dummy_mode, spotify_handler, news_processor, played_songs, articles_list, used_articles):
-    """
-    Build the initial queue with the specified pattern.
-    """
-    play_queue = []
-    expand_queue(play_queue, dummy_mode, spotify_handler, news_processor, None, played_songs, articles_list, used_articles)
-    return play_queue
+def build_initial_queue(dummy_mode, spotify_handler, news_processor, played_songs,
+                        articles_list, used_articles):
+    q = []
+    expand_queue(q, dummy_mode, spotify_handler, news_processor, None,
+                 played_songs, articles_list, used_articles)
+    return q
 
-def print_queue_status(play_queue, current_index):
-    """Helper function to print the current state of the queue."""
-    # Clear console (works on both Windows and Unix-like systems)
-    os.system('cls' if os.name == 'nt' else 'clear')
-    
-    print("\n=== Current Queue Status ===")
-    print(f"Current index: {current_index}")
-    for i, item in enumerate(play_queue):
-        prefix = "→" if i == current_index-1 else " "
-        
-        if item["type"] == "song":
-            print(f"{prefix} {i+1}. [Song] {item['data']['name']} by {item['data']['artist']}")
-        
-        elif item["type"] == "conversation":
-            # For generated conversations, show what they're talking about
-            if 'type' in item.get('data_context', {}):
-                if item['data_context']['type'] == 'song_description':
-                    song = item['data_context']['song_name']
-                    artist = item['data_context']['artist']
-                    print(f"{prefix} {i+1}. [Conversation] About '{song}' by {artist}")
-                elif item['data_context']['type'] == 'news_description':
-                    title = item['data_context']['article']['title']
-                    if len(title) > 50:
-                        title = title[:47] + "..."
-                    print(f"{prefix} {i+1}. [Conversation] About news: {title}")
-            else:
-                print(f"{prefix} {i+1}. [Conversation] {len(item['data'])} lines of dialogue")
-        
-        elif item["type"] == "conversation_pre_recorded":
-            print(f"{prefix} {i+1}. [Pre-recorded Conversation] {len(item['data'])} files")
-        
-        elif item["type"] == "conversation_placeholder":
-            if item["data"]["type"] == "song_description":
-                song_name = item["data"]["song_name"]
-                artist = item["data"]["artist"]
-                print(f"{prefix} {i+1}. [Upcoming Conversation] About '{song_name}' by {artist}")
-            
-            elif item["data"]["type"] == "news_description":
-                article = item["data"]["article"]
-                title = article["title"]
-                if len(title) > 50:
-                    title = title[:47] + "..."
-                print(f"{prefix} {i+1}. [Upcoming Conversation] News: {title}")
-        
-        else:
-            print(f"{prefix} {i+1}. [{item['type']}]")
-    
-    print("========================\n")
-
-def generate_conversation_from_placeholder(placeholder_data, dialogue_generator):
-    """
-    Given a placeholder data dict, generate the actual conversation text.
-    """
+def generate_conversation_from_placeholder(placeholder_data, dialogue_gen):
     ctype = placeholder_data["type"]
     if ctype == "song_description":
-        # Generate a short dialogue describing the song that just ended.
         song_name = placeholder_data["song_name"]
         artist = placeholder_data["artist"]
-        speeches = dialogue_generator.generate_song_dialogue(song_name, artist)
-        return speeches
-
+        if dialogue_gen:
+            return dialogue_gen.generate_song_dialogue(song_name, artist)
+        else:
+            return [
+                f"MATT: That was '{song_name}' by {artist}. Always a vibe!",
+                "MOLLIE: Definitely. Let’s keep the party going!"
+            ]
     elif ctype == "news_description":
-        # Generate a dialogue about the selected article
-        article = placeholder_data["article"]
-        summarised_article = dialogue_generator.summarise_article_for_dialogue(article)
-        speeches = dialogue_generator.generate_dialogue_for_news(summarised_article)
-        return speeches
-
+        if dialogue_gen:
+            art = placeholder_data["article"]
+            summary = dialogue_gen.summarise_article_for_dialogue(art)
+            return dialogue_gen.generate_dialogue_for_news(summary)
+        else:
+            return [
+                "MATT: Some interesting news out there, apparently!",
+                "MOLLIE: Big stuff happening. Next song soon!"
+            ]
     else:
-        # Fallback
-        return ["MATT: I'm not sure what to talk about.", "MOLLIE: Me neither."]
+        return ["MATT: Not sure what to talk about.", "MOLLIE: Me neither."]
 
-def pre_generate_next_conversation_if_needed(play_queue, current_index, dialogue_generator, dummy_mode):
-    """
-    If the next item after the currently playing song is a conversation_placeholder,
-    generate it now (before the song ends), but do not play it yet.
-    Just convert it to a 'conversation' item with the speeches ready.
-    """
+def pre_generate_next_conversation_if_needed(play_queue, current_index, diag_gen, is_dummy):
     if current_index < len(play_queue):
-        next_item = play_queue[current_index]
-        if next_item["type"] == "conversation_placeholder":
-            # Generate now
-            if not dummy_mode and dialogue_generator:
-                speeches = generate_conversation_from_placeholder(next_item["data"], dialogue_generator)
-            else:
-                # Dummy or no generator
-                speeches = ["MATT: Placeholder conversation.", "MOLLIE: Placeholder conversation."]
-            
-            # Preserve the context of what the conversation is about
-            next_item["data_context"] = next_item["data"]
-            next_item["type"] = "conversation"
-            next_item["data"] = speeches
+        nxt = play_queue[current_index]
+        if nxt["type"] == "conversation_placeholder":
+            speeches = (
+                generate_conversation_from_placeholder(nxt["data"], diag_gen)
+                if not is_dummy else
+                ["MATT: Placeholder...", "MOLLIE: Placeholder..."]
+            )
+            nxt["data_context"] = nxt["data"]
+            nxt["type"] = "conversation"
+            nxt["data"] = speeches
 
-def main():
-    args = parse_arguments()
-    dummy_mode = args.dummy
+##############################################################################
+# HOST AUDIO STREAMING
+##############################################################################
 
-    visualiser = Visualiser()
-    audio_player = AudioPlayer(visualiser=visualiser)
-    voice_generator = VoiceGenerator()
-    spotify_handler = SpotifyHandler(username="leo.camacho1738")
+def stream_host_tts(mp3_path: str):
+    """
+    Generator: yields small raw PCM chunks (~200ms each) from an MP3 file.
+    """
+    segment = pydub.AudioSegment.from_mp3(mp3_path)
+    segment = segment.set_frame_rate(24000).set_channels(1)
 
-    used_articles = set()  # Keep track of articles we've used
-    played_songs = []      # Keep track of songs we've played
+    chunk_ms = 200
+    pos = 0
+    while pos < len(segment):
+        chunk = segment[pos : pos + chunk_ms]
+        pos += chunk_ms
+        yield chunk.raw_data
 
-    if dummy_mode:
-        # Dummy mode: no article selection, no dialogue generation needed
-        news_processor = None
-        dialogue_generator = None
-        articles_list = []
-    else:
-        # Normal mode
-        # In the original, we had a source_selector, but instructions do not show usage now.
-        # We'll assume we just get and process sources automatically. 
-        # If needed, reintroduce source_selector logic.
-        news_processor = NewsProcessor()
-        articles_list = news_processor.get_latest_articles()
-        if not articles_list:
-            print("No articles found. Proceeding with dummy article placeholders.")
-            articles_list = []
-        dialogue_generator = DialogueGenerator()
+async def broadcast_host_tts(mp3_path: str, speaker: str):
+    """
+    Async: base64-encodes the PCM frames and sends them to all clients on /ws/host_audio.
+    """
+    for raw_pcm in stream_host_tts(mp3_path):
+        b64_pcm = base64.b64encode(raw_pcm).decode("utf-8")
+        packet = {
+            "event": "media",
+            "media": {"payload": b64_pcm},
+            "speaker": speaker.lower()
+        }
+        # Send to every connected WS
+        dead = []
+        for ws in list(HOST_WS_CONNECTIONS):
+            try:
+                await ws.send_json(packet)
+            except:
+                dead.append(ws)
+        for d in dead:
+            HOST_WS_CONNECTIONS.remove(d)
 
-    # Build initial queue
-    play_queue = build_initial_queue(dummy_mode, spotify_handler, news_processor, played_songs, articles_list, used_articles)
-    current_index = 0
-    print_queue_status(play_queue, current_index)
+        await asyncio.sleep(0.2)
+
+
+def play_dialogues(speeches, voice_generator, audio_player):
+    """
+    1) Generate TTS into MP3 files (via voice_generator).
+    2) For each file => 
+       - schedule an async broadcast to push PCM to /ws/host_audio 
+         on the *UVICORN_LOOP*
+       - block & play via PyGame 
+    """
+    q = queue.Queue()
+    gen_thread = Thread(target=voice_generator.generate_to_queue, args=(speeches, q))
+    gen_thread.start()
 
     while True:
-        if current_index >= len(play_queue):
-            print("Queue ended. No more items.")
+        item = q.get()
+        if item is None:
+            break
+        audio_file, speaker = item
+
+        # The key fix: schedule the streaming on the uvicorn event loop
+        if UVICORN_LOOP:
+            asyncio.run_coroutine_threadsafe(
+                broadcast_host_tts(audio_file, speaker),
+                UVICORN_LOOP
+            )
+
+        # Play locally (blocking)
+        audio_player._play_file(audio_file, speaker)
+
+##############################################################################
+# RADIO LOOP
+##############################################################################
+
+def radio_loop():
+    global radio_running, radio_queue, current_index
+    global dummy_mode, spotify_handler, voice_generator, audio_player
+
+    print("Radio loop started.")
+
+    while radio_running:
+        if current_index >= len(radio_queue):
+            print("[Radio] queue ended or empty, expanding for continuity.")
+            expand_queue(radio_queue, dummy_mode, spotify_handler, news_processor,
+                         dialogue_generator, played_songs, articles_list, used_articles)
+
+        if current_index >= len(radio_queue):
+            print("[Radio] still no items after expansion, stopping.")
+            radio_running = False
             break
 
-        # Check if we need to expand the queue soon (when only 2 items left)
-        # 2 items left means: if len(play_queue) - current_index < 3
-        # Because we are about to play one item and then only 2 remain
-        if (len(play_queue) - current_index) < 3:
-            # Expand the queue
-            expand_queue(play_queue, dummy_mode, spotify_handler, news_processor, dialogue_generator, played_songs, articles_list, used_articles)
-            print("Expanded the queue because we were running low on items.")
-            print_queue_status(play_queue, current_index)
-
-        item = play_queue[current_index]
+        item = radio_queue[current_index]
         current_index += 1
 
-        if item["type"] == "conversation":
-            # Play the conversation
-            print("\nPlaying conversation:")
-            for idx, speech in enumerate(item["data"], start=1):
-                print(f"Speaker {idx}: {speech}")
-            play_dialogues(item["data"], visualiser, voice_generator, audio_player)
+        if item["type"] == "song":
+            sdata = item["data"]
+            print(f"[Radio] Now playing: {sdata['name']} by {sdata['artist']}")
+            if sdata.get("uri"):
+                spotify_handler.play_track(sdata["uri"])
 
-        elif item["type"] == "conversation_pre_recorded":
-            print("\nPlaying pre-recorded conversation:")
-            play_pre_recorded_dialogues(item["data"], visualiser, audio_player)
-
-        elif item["type"] == "conversation_placeholder":
-            # If we ever hit a placeholder un-generated (which shouldn't happen now),
-            # Generate on the fly and play:
-            print("Warning: conversation_placeholder reached without pre-generation.")
-            if not dummy_mode and dialogue_generator:
-                speeches = generate_conversation_from_placeholder(item["data"], dialogue_generator)
-            else:
-                speeches = ["MATT: Placeholder", "MOLLIE: Placeholder"]
-            item["type"] = "conversation"
-            item["data"] = speeches
-            print("\nPlaying generated conversation:")
-            for idx, speech in enumerate(speeches, start=1):
-                print(f"Speaker {idx}: {speech}")
-            play_dialogues(speeches, visualiser, voice_generator, audio_player)
-
-        elif item["type"] == "song":
-            song = item["data"]
-            spotify_handler.play_track(song['uri'])
-            print_queue_status(play_queue, current_index)
-            print(f"\nNow playing: {song['name']} by {song['artist']}")
-
-            # While playing, we check if the next item is a conversation_placeholder
-            # If yes, generate it during the last ~10 seconds of the current song.
             conversation_prepared = False
-
-            while True:
-                remaining_time = spotify_handler.get_remaining_time()
-                if remaining_time is None:
-                    print("Playback stopped unexpectedly.")
+            while radio_running:
+                remaining = (spotify_handler.get_remaining_time()
+                             if sdata.get("uri") else None)
+                if remaining is None:
+                    print("[Radio] Song ended or no playback device. Moving on.")
                     break
-
-                # If close to end of song and next is conversation_placeholder (not yet generated), generate it now
-                if remaining_time < 10000 and not conversation_prepared:
-                    pre_generate_next_conversation_if_needed(play_queue, current_index, dialogue_generator, dummy_mode)
+                if remaining < 10000 and not conversation_prepared:
+                    pre_generate_next_conversation_if_needed(radio_queue, current_index,
+                                                             dialogue_generator, dummy_mode)
                     conversation_prepared = True
-
-                if remaining_time < 4000:
-                    # Track finished
+                if remaining < 4000:
                     break
-
                 time.sleep(0.5)
 
+        elif item["type"] == "conversation_placeholder":
+            print("[Radio] conversation_placeholder not pre-generated. Doing now.")
+            speeches = generate_conversation_from_placeholder(item["data"], dialogue_generator)
+            item["type"] = "conversation"
+            item["data"] = speeches
+            print("[Radio] Now playing conversation.")
+            play_dialogues(speeches, voice_generator, audio_player)
+
+        elif item["type"] == "conversation":
+            print(f"[Radio] Playing conversation: {item['data']}")
+            play_dialogues(item["data"], voice_generator, audio_player)
+
         else:
-            print(f"Unknown queue item type: {item['type']}")
+            print(f"[Radio] Unknown item type: {item['type']}. Skipping.")
 
-    print("All done.")
+    radio_running = False
+    print("Radio loop finished.")
 
+
+##############################################################################
+# FASTAPI ROUTES
+##############################################################################
+
+@app.post("/api/start_radio")
+def start_radio():
+    global radio_queue, current_index, used_articles, played_songs
+    global radio_running, radio_thread
+
+    radio_queue.clear()
+    used_articles.clear()
+    played_songs.clear()
+    current_index = 0
+
+    radio_queue.extend(build_initial_queue(dummy_mode, spotify_handler, news_processor,
+                                          played_songs, articles_list, used_articles))
+    radio_running = True
+
+    radio_thread = threading.Thread(target=radio_loop, daemon=True)
+    radio_thread.start()
+
+    return {"status": "ok", "message": "Radio started. queue built."}
+
+@app.get("/api/queue")
+def get_queue():
+    return {
+        "queue": radio_queue,
+        "currentIndex": current_index
+    }
+
+@app.get("/")
+def index():
+    return {"status": "Radio Station API running"}
+
+
+##############################################################################
+# CALLER REALTIME WS
+##############################################################################
+
+@app.websocket("/ws/realtime-convo")
+async def realtime_convo_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        print("No OPENAI_API_KEY -> local echo.")
+        await handle_local_echo(websocket)
+    else:
+        await handle_openai_realtime(websocket, api_key)
+    print("[WebSocket] connection open")
+
+async def handle_local_echo(websocket: WebSocket):
+    try:
+        while True:
+            data = await websocket.receive_text()
+            parsed = json.loads(data)
+            if parsed.get("event") == "media" and "media" in parsed:
+                b64audio = parsed["media"]["payload"]
+                await websocket.send_json({
+                    "event": "media",
+                    "media": {"payload": b64audio},
+                    "speaker": "caller"
+                })
+    except WebSocketDisconnect:
+        print("Local echo: client disconnected.")
+    except Exception as e:
+        print("Local echo error:", e)
+    finally:
+        await websocket.close()
+
+async def handle_openai_realtime(websocket: WebSocket, api_key: str):
+    openai_headers = [
+        ("Authorization", f"Bearer {api_key}"),
+        ("OpenAI-Beta", "realtime=v1"),
+    ]
+    instructions = REALTIME_MOLLIE_PROMPT.format(custom_context="(Server-based conversation)")
+    model = "gpt-4o-realtime-preview-2024-10-01"
+    endpoint_url = f"wss://api.openai.com/v1/realtime?model={model}"
+
+    try:
+        async with websockets.connect(endpoint_url, headers=openai_headers, ping_interval=30) as openai_ws:
+            session_update = {
+                "type": "session.update",
+                "session": {
+                    "modalities": ["text", "audio"],
+                    "instructions": instructions,
+                    "voice": "nova",
+                    "input_audio_format": "pcm16",
+                    "output_audio_format": "pcm16",
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 1000,
+                        "create_response": True
+                    },
+                    "temperature": 0.4
+                }
+            }
+            await openai_ws.send(json.dumps(session_update))
+
+            async def from_client_to_openai():
+                try:
+                    while True:
+                        msg = await websocket.receive_text()
+                        msg_data = json.loads(msg)
+                        if msg_data.get("event") == "media":
+                            b64audio = msg_data["media"]["payload"]
+                            await openai_ws.send(json.dumps({
+                                "type": "input_audio_buffer.append",
+                                "audio": b64audio
+                            }))
+                except WebSocketDisconnect:
+                    print("Realtime call client disconnected.")
+                except Exception as e:
+                    print("from_client_to_openai error:", e)
+
+            async def from_openai_to_client():
+                try:
+                    async for msg_str in openai_ws:
+                        try:
+                            d = json.loads(msg_str)
+                        except:
+                            continue
+                        if d.get("type") == "response.audio.delta" and "delta" in d:
+                            chunk_b64 = d["delta"]
+                            await websocket.send_json({
+                                "event": "media",
+                                "media": {"payload": chunk_b64},
+                                "speaker": "caller"
+                            })
+                        elif d.get("type") == "response.text.delta":
+                            delta_text = d.get("delta", "")
+                            await websocket.send_json({
+                                "event": "text_delta",
+                                "delta": delta_text
+                            })
+                        elif d.get("type") == "response.text.done":
+                            await websocket.send_json({"event": "text_done"})
+                except Exception as e:
+                    print("from_openai_to_client error:", e)
+
+            await asyncio.gather(
+                from_client_to_openai(),
+                from_openai_to_client()
+            )
+
+    except Exception as e:
+        print("Error connecting to OpenAI Realtime:", e)
+        await websocket.send_text(f"Error connecting to OpenAI Realtime: {str(e)}")
+    finally:
+        await websocket.close()
+        print("[WS] closed openai realtime")
+
+##############################################################################
+# HOST TTS WEBSOCKET
+##############################################################################
+
+@app.websocket("/ws/host_audio")
+async def host_audio_endpoint(websocket: WebSocket):
+    """
+    We'll push PCM data for Matt/Mollie to these connections in broadcast_host_tts().
+    """
+    await websocket.accept()
+    HOST_WS_CONNECTIONS.add(websocket)
+    print("[WebSocket] client joined /ws/host_audio for host TTS")
+    try:
+        while True:
+            _ = await websocket.receive_text()  
+            # Not expecting data from client, 
+            # but must read to keep connection alive.
+    except WebSocketDisconnect:
+        pass
+    finally:
+        HOST_WS_CONNECTIONS.remove(websocket)
+        print("[WebSocket] client left /ws/host_audio")
+
+
+##############################################################################
+# UVICORN ENTRY POINT
+##############################################################################
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    # We rely on the lifespan to set up UVICORN_LOOP
+    uvicorn.run(app, host="0.0.0.0", port=8000)
